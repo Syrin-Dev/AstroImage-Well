@@ -1,0 +1,8 @@
+flask
+astropy
+requests
+pandas
+scipy
+astroquery
+astroplan
+matplotlib

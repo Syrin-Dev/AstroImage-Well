@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+*$py.class
+flask_output.log
+.env
+.vscode/
