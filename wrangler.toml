@@ -1,0 +1,9 @@
+name = "astroimage-well"
+main = "app.py"
+compatibility_date = "2025-12-27"
+
+[vars]
+# Add any environment variables here
+
+# Python Workers require the "python_workers" compatibility flag
+compatibility_flags = ["python_workers"]
