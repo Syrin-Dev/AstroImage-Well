@@ -1,6 +1,4 @@
-name = "astroimage-well"
+name = "astrowell"
 main = "app.py"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["python_workers"]
-# wrangler.toml
-name = 'astrowell1'
