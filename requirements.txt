@@ -6,4 +6,4 @@ scipy
 astroquery
 astroplan
 matplotlib
-a2wsgi
+gunicorn

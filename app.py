@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify
 from datetime import datetime
-from a2wsgi import ASGIMiddleware
 import sys
 
 # Graceful import handling
@@ -104,13 +103,5 @@ def results():
     except Exception as e:
         return render_template('error.html', error=str(e))
 
-# Wrap Flask app with ASGIMiddleware for ASGI compatibility
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
-
-# Wrap Flask app with ASGIMiddleware for ASGI compatibility
-# This overwrites the 'app' variable to be the ASGI app for the Worker
-app = ASGIMiddleware(app)
-
-async def on_fetch(request, env):
-    return await app(request, env)
