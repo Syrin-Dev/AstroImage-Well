@@ -1,7 +1,6 @@
 name = "astroimage-well"
-main = "app.py"
+main = "worker.js"
 compatibility_date = "2024-09-23"
-compatibility_flags = ["python_workers"]
 
 [vars]
 # Add any environment variables here
