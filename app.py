@@ -105,13 +105,12 @@ def results():
         return render_template('error.html', error=str(e))
 
 # Wrap Flask app with ASGIMiddleware for ASGI compatibility
-asgi_app = ASGIMiddleware(app)
-
-async def on_fetch(request, env):
-    """
-    Cloudflare Worker entry point.
-    """
-    return await asgi_app(request, env)
-
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
+# Wrap Flask app with ASGIMiddleware for ASGI compatibility
+# This overwrites the 'app' variable to be the ASGI app for the Worker
+app = ASGIMiddleware(app)
+
+async def on_fetch(request, env):
+    return await app(request, env)
