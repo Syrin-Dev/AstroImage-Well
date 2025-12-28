@@ -88,25 +88,15 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
         const tooltip = `${obj.id} (${obj.name}) | Alt: ${obj.altitude.toFixed(0)}°`;
 
         return `
-        <g class="group cursor-pointer hover:z-50" onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')">
-            <!-- Hit Area & Glow -->
-            <circle cx="${x}" cy="${y}" r="8" fill="transparent" class="group-hover:fill-white/5"></circle>
-            
-            <!-- Core Dot -->
-            <circle cx="${x}" cy="${y}" r="2" fill="${color}" class="drop-shadow-[0_0_5px_${color}] ${pulseClass} transition-transform group-hover:scale-150"></circle>
-            
-            <!-- Tooltip (Enhanced) -->
-            <foreignObject x="${x}" y="${y - 12}" width="150" height="50" class="opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none overflow-visible">
-                <div xmlns="http://www.w3.org/1999/xhtml" class="transform -translate-x-1/2 flex flex-col items-center">
-                    <div class="bg-slate-900 border border-slate-600 rounded-md px-2 py-1 shadow-2xl flex flex-col items-center text-center gap-0.5">
-                        <span class="text-[5px] font-bold text-white whitespace-nowrap uppercase tracking-wider">${obj.id}</span>
-                        <span class="text-[4px] text-slate-400 whitespace-nowrap max-w-[80px] truncate">${obj.name}</span>
-                        <span class="text-[3px] font-mono text-accent-400 mt-0.5 whitespace-nowrap bg-accent-400/10 px-1 rounded">ALT: ${obj.altitude.toFixed(0)}°</span>
-                    </div>
-                    <!-- Triangle Arrow -->
-                    <div class="w-0 h-0 border-l-[2px] border-l-transparent border-r-[2px] border-r-transparent border-t-[2px] border-t-slate-600"></div>
-                </div>
-            </foreignObject>
+        <g class="cursor-pointer" 
+           onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')"
+           onmouseenter="showTooltip(evt, '${obj.id}', '${obj.name}', '${obj.altitude.toFixed(0)}')"
+           onmouseleave="hideTooltip()"
+        >
+            <!-- Hit Area -->
+            <circle cx="${x}" cy="${y}" r="6" fill="transparent" class="hover:fill-white/10"></circle>
+            <!-- Dot -->
+            <circle cx="${x}" cy="${y}" r="2" fill="${color}" class="drop-shadow-[0_0_5px_${color}] ${pulseClass} hover:scale-150 transition-transform"></circle>
         </g>`;
     }).join('');
 
@@ -361,25 +351,57 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
             }, 300);
         }
 
+        // --- Singleton Tooltip Logic ---
+        const tooltipEl = document.getElementById('globalTooltip');
+        
+        function showTooltip(evt, id, name, alt) {
+            // Content
+            document.getElementById('tt-id').innerText = id;
+            document.getElementById('tt-name').innerText = name;
+            document.getElementById('tt-alt').innerText = 'ALT: ' + alt + '°';
+            
+            // Position
+            const rect = evt.target.getBoundingClientRect();
+            // Or use mouse? let's use element center for stability
+            // Actually rect of <g> might be large. Let's use mouse evt target (circle)
+            // But evt.target is the circle inside G.
+            
+            // Let's just place it near the mouse
+            // But better: place it exactly above the dot.
+            // SVG coordinates are tricky. Let's use Client Rects.
+            const dotRect = evt.target.getBoundingClientRect();
+            const top = dotRect.top - 60 + window.scrollY; // 60px above
+            const left = dotRect.left + (dotRect.width/2) - (150/2) + window.scrollX; // Center 150px tooltip
+            
+            tooltipEl.style.top = top + 'px';
+            tooltipEl.style.left = left + 'px';
+            tooltipEl.style.opacity = '1';
+        }
+        
+        function hideTooltip() {
+            tooltipEl.style.opacity = '0';
+        }
+
         function imageLoaded() {
-            document.getElementById('simLoading').style.display = 'none';
-            document.getElementById('simImage').style.opacity = '1';
+            const loader = document.getElementById('simLoading');
+            const img = document.getElementById('simImage');
+            if(loader) loader.style.display = 'none';
+            if(img) img.style.opacity = '1';
         }
         
         function imageError() {
              console.warn("DSS Failed, trying backup...");
              const img = document.getElementById('simImage');
              // Avoid infinite loop
-             if (img.src.includes('sky-map.org')) {
-                document.getElementById('simLoading').innerHTML = '<span class="text-red-500 text-xs">Image unavailable in all surveys</span>';
+             if (!img || img.src.includes('sky-map.org')) {
+                const loader = document.getElementById('simLoading');
+                if(loader) loader.innerHTML = '<span class="text-red-500 text-xs">Image unavailable in all surveys</span>';
                 return;
              }
              
-             // Backup Strategy: WikiSky / SDSS
-             // WikiSky API: http://server7.sky-map.org/imgcut?survey=DSS2&w={w}&h={h}&ra={ra}&de={de}&angle=1.25&output=jpg
-             const w = 400; // pixels
+             // Backup Strategy: WikiSky
+             const w = 400; 
              const h = 400;
-             // Scale: angle=... requires tuning. Let's try simple SDSS cut or WikiSky
              img.src = \`http://server7.sky-map.org/imgcut?survey=DSS2&img_id=all&angle=0.5&ra=\${currentTarget.ra}&de=\${currentTarget.dec}&w=\${w}&h=\${h}&projection=tan\`;
         }
 
@@ -388,6 +410,16 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
             if (e.key === 'Escape') closeSim();
         });
     </script>
+    
+    <!-- External Singleton Tooltip -->
+    <div id="globalTooltip" class="fixed top-0 left-0 w-[150px] pointer-events-none opacity-0 transition-opacity duration-200 z-[100] flex flex-col items-center">
+        <div class="bg-slate-900/95 border border-slate-600 rounded-md px-3 py-2 shadow-2xl flex flex-col items-center text-center backdrop-blur-sm">
+            <span id="tt-id" class="text-xs font-bold text-white whitespace-nowrap uppercase tracking-wider"></span>
+            <span id="tt-name" class="text-[10px] text-slate-400 whitespace-nowrap w-full truncate mb-1"></span>
+            <span id="tt-alt" class="text-[9px] font-mono text-accent-400 bg-accent-400/10 px-1.5 rounded-full"></span>
+        </div>
+        <div class="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-600 -mt-[1px]"></div>
+    </div>
 </body>
 </html>
     `;
