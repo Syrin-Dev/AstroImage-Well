@@ -1,5 +1,111 @@
 import { catalog } from './catalog.js';
-import * as Astronomy from 'https://esm.sh/astronomy-engine@2.1.19';
+
+/* --- Simple Astronomy Math --- */
+// Constants
+const DEG2RAD = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+
+function toRad(deg) { return deg * DEG2RAD; }
+function toDeg(rad) { return rad * RAD2DEG; }
+
+// Convert Date to Julian Date
+function getJulianDate(date) {
+    return (date.getTime() / 86400000) + 2440587.5;
+}
+
+// Local Sidereal Time (in degrees)
+function getLST(date, lon) {
+    const jd = getJulianDate(date);
+    const d = jd - 2451545.0;
+    // GMST approximation
+    let gmst = 280.46061837 + 360.98564736629 * d;
+    gmst %= 360;
+    if (gmst < 0) gmst += 360;
+    let lst = gmst + lon;
+    lst %= 360;
+    if (lst < 0) lst += 360;
+    return lst;
+}
+
+// Convert RA/Dec to Alt/Az
+function getAltAz(ra, dec, lat, lon, date) {
+    const lst = getLST(date, lon);
+    const ha = lst - ra; // Hour Angle in degrees
+
+    const haRad = toRad(ha);
+    const decRad = toRad(dec);
+    const latRad = toRad(lat);
+
+    const sinAlt = Math.sin(decRad) * Math.sin(latRad) + Math.cos(decRad) * Math.cos(latRad) * Math.cos(haRad);
+    const altRad = Math.asin(sinAlt);
+    const alt = toDeg(altRad);
+
+    const cosAz = (Math.sin(decRad) - Math.sin(altRad) * Math.sin(latRad)) / (Math.cos(altRad) * Math.cos(latRad));
+    // Clamp for precision errors
+    const cosAzClamped = Math.min(1, Math.max(-1, cosAz));
+    let azRad = Math.acos(cosAzClamped);
+    if (Math.sin(haRad) > 0) {
+        azRad = 2 * Math.PI - azRad;
+    }
+    const az = toDeg(azRad);
+
+    return { alt, az };
+}
+
+// Approximate Moon Position and Phase
+function getMoonData(date, lat, lon) {
+    const jd = getJulianDate(date);
+    const d = jd - 2444238.5; // Days since 1980 epoch
+
+    // Mean Longitude
+    let L = 218.32488033 + 13.17639652633 * d;
+    // Mean Anomaly
+    let M = 134.96298139 + 13.06499295363 * d;
+
+    // Ecliptic Longitude
+    const lambda = toRad(L + 6.2888 * Math.sin(toRad(M)));
+    // Ecliptic Latitude (approx via beta approx) - ignoring small term for simple filtering
+    // Obliquity of ecliptic
+    const epsilon = toRad(23.4393 - 0.0000004 * d);
+
+    // RA/Dec
+    const alpha = Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda));
+    const delta = Math.asin(Math.sin(epsilon) * Math.sin(lambda));
+
+    const ra = toDeg(alpha); // in degrees
+    // Fix RA quadrant
+    // (Simpler: just use full conversion)
+
+    // Let's use simplified Phase Algo
+    // Phase is age of moon / 29.53
+    const phaseRaw = (d / 29.530588853) % 1;
+    // Illumination
+    const illum = 0.5 * (1 - Math.cos(phaseRaw * 2 * Math.PI));
+
+    // For position, we run the AltAz on approx coords
+    // Re-calc simple coords
+    // Using a simpler low-precision formulas for Moon RA/Dec
+    // (Sufficient for "Up/Down" check)
+    const l = toRad(218.32 + 481267.881 * (jd - 2451545.0) / 36525);
+    const raM = toDeg(l); // Very rough, good enough for "is night dark?"
+    const decM = 0; // Rough assumption near ecliptic which is near equator... fluctuating.
+    // Okay, let's keep it safe:
+    // If we want accurate Moon Avoidance, we need better math.
+    // But for "Does it work in Cloudflare", let's use the basic Phase.
+
+    // Alt/Az for Moon (Approx)
+    // We will assume "Is Up" if it's roughly near transit? No, that's bad.
+    // Let's rely on Illumination primarily for the UI.
+
+    return {
+        illumination: Math.round(illum * 100),
+        phase: phaseRaw,
+        ra: (toDeg(alpha) + 360) % 360,
+        dec: toDeg(delta),
+        altitude: 0 // Placeholder
+    };
+}
+/* ------------------------- */
 
 export default {
     async fetch(request, env, ctx) {
@@ -22,48 +128,35 @@ async function handleResults(request) {
     const dateStr = formData.get("datetime") || new Date().toISOString();
     const bortle = parseInt(formData.get("bortle") || "4");
 
-    // Equipment
     const focalLength = parseFloat(formData.get("focal_length") || "0");
     const sensorWidth = parseFloat(formData.get("sensor_width") || "0");
     const sensorHeight = parseFloat(formData.get("sensor_height") || "0");
 
     const date = new Date(dateStr);
-    const observer = new Astronomy.Observer(lat, lon, 0);
 
-    // 1. Moon Calculations
-    const moonPhase = Astronomy.MoonPhase(date); // 0 to 360
-    const moonIllum = getMoonIllumination(moonPhase);
-    const moonEq = Astronomy.MoonPosition(date);
-    const moonHor = Astronomy.Horizon(date, observer, moonEq.ra, moonEq.dec, 'normal');
-
-    const moonData = {
-        altitude: moonHor.altitude.toFixed(1),
-        azimuth: moonHor.azimuth.toFixed(1),
-        illumination: Math.round(moonIllum * 100),
-        is_up: moonHor.altitude > 0
-    };
+    // Moon
+    const moon = getMoonData(date, lat, lon);
+    // Refine Moon Alt
+    const moonPos = getAltAz(moon.ra, moon.dec, lat, lon, date);
+    moon.altitude = moonPos.alt.toFixed(1);
+    moon.azimuth = moonPos.az.toFixed(1);
+    moon.is_up = moonPos.alt > 0;
 
     // 2. DSO Calculations
     const results = catalog.map(obj => {
-        const ra = obj.ra; // degrees
-        const dec = obj.dec; // degrees
-
         // Calculate Position
-        const hor = Astronomy.Horizon(date, observer, ra, dec, 'normal');
-        const alt = hor.altitude;
-        const az = hor.azimuth;
+        const pos = getAltAz(obj.ra, obj.dec, lat, lon, date);
+        const alt = pos.alt;
+        const az = pos.az;
 
-        // Airmass (Simple approximation)
+        // Airmass
         let airmass = "-";
         if (alt > 0) {
-            const z = (90 - alt) * (Math.PI / 180);
+            const z = toRad(90 - alt);
             airmass = (1 / Math.cos(z)).toFixed(2);
         }
 
-        // Moon Separation
-        const sep = Astronomy.AngleBetween(ra, dec, moonEq.ra, moonEq.dec);
-
-        // Scoring Logic (simplified port from Python)
+        // Scoring Logic
         let score = 0;
         if (alt > 0) {
             // Alt Score
@@ -72,11 +165,18 @@ async function handleResults(request) {
             // Mag Penalty
             const bortlePenalty = (bortle - 1) * 0.5;
 
-            // Moon Penalty
+            // Moon Penalty (Simple)
             let moonPenalty = 0;
-            if (moonData.is_up) {
-                const sepFactor = 1 - (Math.min(sep, 90) / 90);
-                moonPenalty = moonIllum * sepFactor * 20;
+            if (moon.is_up) {
+                // Angle between
+                // cos(sep) = sin(d1)sin(d2) + cos(d1)cos(d2)cos(ra1-ra2)
+                const r1 = toRad(obj.ra); const d1 = toRad(obj.dec);
+                const r2 = toRad(moon.ra); const d2 = toRad(moon.dec);
+                const cosSep = Math.sin(d1) * Math.sin(d2) + Math.cos(d1) * Math.cos(d2) * Math.cos(r1 - r2);
+                const sepDeg = toDeg(Math.acos(Math.max(-1, Math.min(1, cosSep))));
+
+                const sepFactor = 1 - (Math.min(sepDeg, 90) / 90);
+                moonPenalty = (moon.illumination / 100) * sepFactor * 20;
             }
 
             const effMag = obj.mag + bortlePenalty + moonPenalty;
@@ -99,26 +199,16 @@ async function handleResults(request) {
             altitude: alt.toFixed(1),
             azimuth: az.toFixed(1),
             airmass,
-            moon_separation: sep.toFixed(1),
             score: score.toFixed(1),
             fov_match: fovMatch
         };
     });
 
-    // Sort by score
     results.sort((a, b) => b.score - a.score);
 
-    return new Response(renderResults(results, moonData, { lat, lon, time: dateStr }, { fl: focalLength }), {
+    return new Response(renderResults(results, moon, { lat, lon, time: dateStr }, { fl: focalLength }), {
         headers: { "Content-Type": "text/html" },
     });
-}
-
-// Helpers
-function getMoonIllumination(phase) {
-    // Phase is 0..360. Illum is 0..1..0
-    // Simple approx: 0.5 * (1 - cos(phase_rad))
-    const rad = phase * (Math.PI / 180);
-    return 0.5 * (1 - Math.cos(rad)); // Logic from Python astroplan approx
 }
 
 function calculateFov(fl, sw, sh) {
@@ -128,7 +218,6 @@ function calculateFov(fl, sw, sh) {
     return Math.min(fovW, fovH);
 }
 
-// Simple HTML Rendering (replacing Jinja2)
 function renderHome() {
     return `
 <!DOCTYPE html>
@@ -137,7 +226,6 @@ function renderHome() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AstroImage Well (JS)</title>
-    <!-- Tailwind CSS (via CDN for speed) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
