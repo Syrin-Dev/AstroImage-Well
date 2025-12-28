@@ -89,12 +89,22 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
 
         return `
         <g class="group cursor-pointer hover:z-50" onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')">
-            <circle cx="${x}" cy="${y}" r="6" fill="${color}" fill-opacity="0.1" class="opacity-0 group-hover:opacity-100 transition-opacity duration-300"></circle>
-            <circle cx="${x}" cy="${y}" r="1.5" fill="${color}" class="drop-shadow-[0_0_3px_${color}] ${pulseClass}"></circle>
-            <!-- Tooltip -->
-            <foreignObject x="${x + 3}" y="${y - 10}" width="120" height="40" class="opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                <div xmlns="http://www.w3.org/1999/xhtml" class="text-[4px] bg-slate-900/90 border border-slate-600 rounded px-1 py-0.5 text-white whitespace-nowrap shadow-lg">
-                    ${obj.id}<br/><span class="text-slate-400">${obj.name}</span>
+            <!-- Hit Area & Glow -->
+            <circle cx="${x}" cy="${y}" r="8" fill="transparent" class="group-hover:fill-white/5"></circle>
+            
+            <!-- Core Dot -->
+            <circle cx="${x}" cy="${y}" r="2" fill="${color}" class="drop-shadow-[0_0_5px_${color}] ${pulseClass} transition-transform group-hover:scale-150"></circle>
+            
+            <!-- Tooltip (Enhanced) -->
+            <foreignObject x="${x}" y="${y - 12}" width="150" height="50" class="opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none overflow-visible">
+                <div xmlns="http://www.w3.org/1999/xhtml" class="transform -translate-x-1/2 flex flex-col items-center">
+                    <div class="bg-slate-900 border border-slate-600 rounded-md px-2 py-1 shadow-2xl flex flex-col items-center text-center gap-0.5">
+                        <span class="text-[5px] font-bold text-white whitespace-nowrap uppercase tracking-wider">${obj.id}</span>
+                        <span class="text-[4px] text-slate-400 whitespace-nowrap max-w-[80px] truncate">${obj.name}</span>
+                        <span class="text-[3px] font-mono text-accent-400 mt-0.5 whitespace-nowrap bg-accent-400/10 px-1 rounded">ALT: ${obj.altitude.toFixed(0)}°</span>
+                    </div>
+                    <!-- Triangle Arrow -->
+                    <div class="w-0 h-0 border-l-[2px] border-l-transparent border-r-[2px] border-r-transparent border-t-[2px] border-t-slate-600"></div>
                 </div>
             </foreignObject>
         </g>`;
@@ -306,30 +316,33 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
     </div>
 
     <script>
+        let currentTarget = {};
+
         function openSim(id, ra, dec, size) {
+            currentTarget = { id, ra, dec, size };
             const modal = document.getElementById('simModal');
             const content = document.getElementById('simContent');
             const img = document.getElementById('simImage');
             const loader = document.getElementById('simLoading');
             
-            // Set Data
+            // UI Set
             document.getElementById('simTitle').innerText = id;
-            document.getElementById('simCoords').innerText = \`RA: \${ra} | DEC: \${dec}\`;
+            document.getElementById('simCoords').innerText = \`RA: \${parseFloat(ra).toFixed(4)}° | DEC: \${parseFloat(dec).toFixed(4)}°\`;
             
-            // Reset State
+            // Reset
             loader.style.display = 'flex';
+            loader.innerHTML = '<div class="w-10 h-10 border-4 border-accent-500 border-t-transparent rounded-full animate-spin"></div>';
             img.style.opacity = '0';
             img.src = ''; 
             
-            // Load Image (Small delay to allow UI to open)
+            // Load Strategy 1: STScI DSS (High Quality GIF)
             setTimeout(() => {
-                // High Quality GIF from DSS
-                img.src = \`https://server.dss.stsci.edu/product?task=thumb&r=\${ra}&d=\${dec}&w=\${size}&h=\${size}&f=gif\`;
-            }, 100);
+                // Ensure size is reasonable (max 60 arcmin for DSS usually)
+                const safeSize = Math.min(60, parseFloat(size) || 15);
+                img.src = \`https://server.dss.stsci.edu/product?task=thumb&r=\${ra}&d=\${dec}&w=\${safeSize}&h=\${safeSize}&f=gif\`;
+            }, 50);
 
-            // Animate In
             modal.classList.remove('hidden');
-            // Force Reflow
             void modal.offsetWidth;
             modal.classList.remove('opacity-0');
             content.classList.remove('scale-95');
@@ -344,7 +357,7 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
             
             setTimeout(() => {
                 modal.classList.add('hidden');
-                document.getElementById('simImage').src = ''; // Stop loading
+                document.getElementById('simImage').src = ''; 
             }, 300);
         }
 
@@ -354,7 +367,20 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
         }
         
         function imageError() {
-             document.getElementById('simLoading').innerHTML = '<span class="text-red-500 text-xs">Image unavailable</span>';
+             console.warn("DSS Failed, trying backup...");
+             const img = document.getElementById('simImage');
+             // Avoid infinite loop
+             if (img.src.includes('sky-map.org')) {
+                document.getElementById('simLoading').innerHTML = '<span class="text-red-500 text-xs">Image unavailable in all surveys</span>';
+                return;
+             }
+             
+             // Backup Strategy: WikiSky / SDSS
+             // WikiSky API: http://server7.sky-map.org/imgcut?survey=DSS2&w={w}&h={h}&ra={ra}&de={de}&angle=1.25&output=jpg
+             const w = 400; // pixels
+             const h = 400;
+             // Scale: angle=... requires tuning. Let's try simple SDSS cut or WikiSky
+             img.src = \`http://server7.sky-map.org/imgcut?survey=DSS2&img_id=all&angle=0.5&ra=\${currentTarget.ra}&de=\${currentTarget.dec}&w=\${w}&h=\${h}&projection=tan\`;
         }
 
         // Close on escape
