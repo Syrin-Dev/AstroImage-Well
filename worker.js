@@ -388,10 +388,25 @@ function renderApp(catalogData) {
                     viewMode, searchQuery,
                     toggleNightMode, nightMode,
                     useGPS, getRadarStyle,
-                    openSimulator, selectedObject, getDSSUrl
+                    openSimulator, selectedObject, getDSSUrl,
+                    error: null
                 };
+            },
+            compilerOptions: {
+              delimiters: ['{{', '}}'] // Ensure standard delimiters are explicit
+            },
+            errorHandler(err, instance, info) {
+                console.error("Vue Error:", err);
+                alert("App Error: " + err.message);
             }
-        }).mount('#app');
+        });
+        
+        // Safety check for Astronomy Engine
+        if (typeof Astronomy === 'undefined') {
+            document.body.innerHTML = '<div style="color:red; padding:20px;">Error: Astronomy Engine failed to load. Please refresh or check your connection.</div>';
+        } else {
+            app.mount('#app');
+        }
     </script>
 </body>
 </html>`;
