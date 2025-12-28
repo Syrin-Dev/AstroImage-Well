@@ -88,24 +88,14 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
         const tooltip = `${obj.id} (${obj.name}) | Alt: ${obj.altitude.toFixed(0)}°`;
 
         return `
-        <!-- Item Group -->
-        <g class="group cursor-pointer hover:z-[100]" onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')">
+        <g class="group cursor-pointer hover:z-50" onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')">
+            <title>${obj.id} - ${obj.name} (Alt: ${obj.altitude.toFixed(0)}°)</title>
             
-            <!-- Large Hit Area (Invisible but clickable) -->
-            <circle cx="${x}" cy="${y}" r="8" fill="transparent" class="group-hover:fill-white/10"></circle>
+            <!-- Hit Area -->
+            <circle cx="${x}" cy="${y}" r="6" fill="transparent" class="group-hover:fill-white/10"></circle>
             
-            <!-- Visual Dot -->
+            <!-- Dot -->
             <circle cx="${x}" cy="${y}" r="2" fill="${color}" class="drop-shadow-[0_0_5px_${color}] ${pulseClass} transition-transform group-hover:scale-150"></circle>
-            
-            <!-- CSS Tooltip (Inside ForeignObject) -->
-            <foreignObject x="${x - 30}" y="${y - 45}" width="60" height="40" class="pointer-events-none overflow-visible">
-                <div xmlns="http://www.w3.org/1999/xhtml" class="w-full h-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150 transform translate-y-2 group-hover:translate-y-0">
-                    <div class="bg-black/90 border border-slate-700/50 rounded px-2 py-1 shadow-xl flex flex-col items-center text-center">
-                        <span class="text-[6px] font-bold text-white whitespace-nowrap leading-none mb-0.5">${obj.id}</span>
-                        <span class="text-[4px] text-accent-400 whitespace-nowrap leading-none">Alt: ${obj.altitude.toFixed(0)}°</span>
-                    </div>
-                </div>
-            </foreignObject>
         </g>`;
     }).join('');
 
