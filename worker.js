@@ -1,339 +1,398 @@
 import { catalog } from './catalog.js';
 
-/* --- Simple Astronomy Math --- */
-// Constants
-const DEG2RAD = Math.PI / 180;
-const RAD2DEG = 180 / Math.PI;
-
-function toRad(deg) { return deg * DEG2RAD; }
-function toDeg(rad) { return rad * RAD2DEG; }
-
-// Convert Date to Julian Date
-function getJulianDate(date) {
-    return (date.getTime() / 86400000) + 2440587.5;
-}
-
-// Local Sidereal Time (in degrees)
-function getLST(date, lon) {
-    const jd = getJulianDate(date);
-    const d = jd - 2451545.0;
-    // GMST approximation
-    let gmst = 280.46061837 + 360.98564736629 * d;
-    gmst %= 360;
-    if (gmst < 0) gmst += 360;
-    let lst = gmst + lon;
-    lst %= 360;
-    if (lst < 0) lst += 360;
-    return lst;
-}
-
-// Convert RA/Dec to Alt/Az
-function getAltAz(ra, dec, lat, lon, date) {
-    const lst = getLST(date, lon);
-    const ha = lst - ra; // Hour Angle in degrees
-
-    const haRad = toRad(ha);
-    const decRad = toRad(dec);
-    const latRad = toRad(lat);
-
-    const sinAlt = Math.sin(decRad) * Math.sin(latRad) + Math.cos(decRad) * Math.cos(latRad) * Math.cos(haRad);
-    const altRad = Math.asin(sinAlt);
-    const alt = toDeg(altRad);
-
-    const cosAz = (Math.sin(decRad) - Math.sin(altRad) * Math.sin(latRad)) / (Math.cos(altRad) * Math.cos(latRad));
-    // Clamp for precision errors
-    const cosAzClamped = Math.min(1, Math.max(-1, cosAz));
-    let azRad = Math.acos(cosAzClamped);
-    if (Math.sin(haRad) > 0) {
-        azRad = 2 * Math.PI - azRad;
-    }
-    const az = toDeg(azRad);
-
-    return { alt, az };
-}
-
-// Approximate Moon Position and Phase
-function getMoonData(date, lat, lon) {
-    const jd = getJulianDate(date);
-    const d = jd - 2444238.5; // Days since 1980 epoch
-
-    // Mean Longitude
-    let L = 218.32488033 + 13.17639652633 * d;
-    // Mean Anomaly
-    let M = 134.96298139 + 13.06499295363 * d;
-
-    // Ecliptic Longitude
-    const lambda = toRad(L + 6.2888 * Math.sin(toRad(M)));
-    // Ecliptic Latitude (approx via beta approx) - ignoring small term for simple filtering
-    // Obliquity of ecliptic
-    const epsilon = toRad(23.4393 - 0.0000004 * d);
-
-    // RA/Dec
-    const alpha = Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda));
-    const delta = Math.asin(Math.sin(epsilon) * Math.sin(lambda));
-
-    const ra = toDeg(alpha); // in degrees
-    // Fix RA quadrant
-    // (Simpler: just use full conversion)
-
-    // Let's use simplified Phase Algo
-    // Phase is age of moon / 29.53
-    const phaseRaw = (d / 29.530588853) % 1;
-    // Illumination
-    const illum = 0.5 * (1 - Math.cos(phaseRaw * 2 * Math.PI));
-
-    // For position, we run the AltAz on approx coords
-    // Re-calc simple coords
-    // Using a simpler low-precision formulas for Moon RA/Dec
-    // (Sufficient for "Up/Down" check)
-    const l = toRad(218.32 + 481267.881 * (jd - 2451545.0) / 36525);
-    const raM = toDeg(l); // Very rough, good enough for "is night dark?"
-    const decM = 0; // Rough assumption near ecliptic which is near equator... fluctuating.
-    // Okay, let's keep it safe:
-    // If we want accurate Moon Avoidance, we need better math.
-    // But for "Does it work in Cloudflare", let's use the basic Phase.
-
-    // Alt/Az for Moon (Approx)
-    // We will assume "Is Up" if it's roughly near transit? No, that's bad.
-    // Let's rely on Illumination primarily for the UI.
-
-    return {
-        illumination: Math.round(illum * 100),
-        phase: phaseRaw,
-        ra: (toDeg(alpha) + 360) % 360,
-        dec: toDeg(delta),
-        altitude: 0 // Placeholder
-    };
-}
-/* ------------------------- */
-
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
 
-        if (request.method === "POST" && url.pathname === "/results") {
-            return await handleResults(request);
+        // API Endpoint for raw data (optional, but good practice)
+        if (url.pathname === "/api/catalog") {
+            return new Response(JSON.stringify(catalog), {
+                headers: { "Content-Type": "application/json" }
+            });
         }
 
-        return new Response(renderHome(), {
+        // Serve the Single Page App (SPA)
+        return new Response(renderApp(catalog), {
             headers: { "Content-Type": "text/html" },
         });
     },
 };
 
-async function handleResults(request) {
-    const formData = await request.formData();
-    const lat = parseFloat(formData.get("latitude"));
-    const lon = parseFloat(formData.get("longitude"));
-    const dateStr = formData.get("datetime") || new Date().toISOString();
-    const bortle = parseInt(formData.get("bortle") || "4");
+// The "Mega" SPA Shell
+function renderApp(catalogData) {
+    const catalogJSON = JSON.stringify(catalogData);
 
-    const focalLength = parseFloat(formData.get("focal_length") || "0");
-    const sensorWidth = parseFloat(formData.get("sensor_width") || "0");
-    const sensorHeight = parseFloat(formData.get("sensor_height") || "0");
-
-    const date = new Date(dateStr);
-
-    // Moon
-    const moon = getMoonData(date, lat, lon);
-    // Refine Moon Alt
-    const moonPos = getAltAz(moon.ra, moon.dec, lat, lon, date);
-    moon.altitude = moonPos.alt.toFixed(1);
-    moon.azimuth = moonPos.az.toFixed(1);
-    moon.is_up = moonPos.alt > 0;
-
-    // 2. DSO Calculations
-    const results = catalog.map(obj => {
-        // Calculate Position
-        const pos = getAltAz(obj.ra, obj.dec, lat, lon, date);
-        const alt = pos.alt;
-        const az = pos.az;
-
-        // Airmass
-        let airmass = "-";
-        if (alt > 0) {
-            const z = toRad(90 - alt);
-            airmass = (1 / Math.cos(z)).toFixed(2);
-        }
-
-        // Scoring Logic
-        let score = 0;
-        if (alt > 0) {
-            // Alt Score
-            let altScore = (alt > 30) ? 50 : (alt / 30) * 50;
-
-            // Mag Penalty
-            const bortlePenalty = (bortle - 1) * 0.5;
-
-            // Moon Penalty (Simple)
-            let moonPenalty = 0;
-            if (moon.is_up) {
-                // Angle between
-                // cos(sep) = sin(d1)sin(d2) + cos(d1)cos(d2)cos(ra1-ra2)
-                const r1 = toRad(obj.ra); const d1 = toRad(obj.dec);
-                const r2 = toRad(moon.ra); const d2 = toRad(moon.dec);
-                const cosSep = Math.sin(d1) * Math.sin(d2) + Math.cos(d1) * Math.cos(d2) * Math.cos(r1 - r2);
-                const sepDeg = toDeg(Math.acos(Math.max(-1, Math.min(1, cosSep))));
-
-                const sepFactor = 1 - (Math.min(sepDeg, 90) / 90);
-                moonPenalty = (moon.illumination / 100) * sepFactor * 20;
-            }
-
-            const effMag = obj.mag + bortlePenalty + moonPenalty;
-            let magScore = 50 - (effMag * 5);
-            magScore = Math.max(0, Math.min(50, magScore));
-
-            score = altScore + magScore;
-        }
-
-        // FOV Check
-        let fovMatch = null;
-        const minFov = calculateFov(focalLength, sensorWidth, sensorHeight);
-        if (minFov && obj.size) {
-            const sizeDeg = obj.size / 60.0;
-            fovMatch = (sizeDeg < minFov) ? "Fits in FOV" : "Too Large";
-        }
-
-        return {
-            ...obj,
-            altitude: alt.toFixed(1),
-            azimuth: az.toFixed(1),
-            airmass,
-            score: score.toFixed(1),
-            fov_match: fovMatch
-        };
-    });
-
-    results.sort((a, b) => b.score - a.score);
-
-    return new Response(renderResults(results, moon, { lat, lon, time: dateStr }, { fl: focalLength }), {
-        headers: { "Content-Type": "text/html" },
-    });
-}
-
-function calculateFov(fl, sw, sh) {
-    if (!fl || !sw || !sh) return null;
-    const fovW = 2 * Math.atan(sw / (2 * fl)) * (180 / Math.PI);
-    const fovH = 2 * Math.atan(sh / (2 * fl)) * (180 / Math.PI);
-    return Math.min(fovW, fovH);
-}
-
-function renderHome() {
-    return `
+    return `<!-- AstroImage Well 2.0 - Professional Client-Side Planner -->
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AstroImage Well (JS)</title>
+    <title>AstroImage Well Pro</title>
+    
+    <!-- Design System -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              space: { 900: '#0B0D17', 800: '#151932', 700: '#2A2F55' },
+              accent: { 400: '#6366F1', 500: '#4F46E5' },
+              success: '#10B981',
+              warning: '#F59E0B',
+              danger: '#EF4444'
+            },
+            fontFamily: { sans: ['Inter', 'sans-serif'] }
+          }
+        }
+      }
+    </script>
     <style>
-        body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+      body { background-color: #0B0D17; color: #E2E8F0; }
+      .glass-panel { background: rgba(21, 25, 50, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+      .scroll-hide::-webkit-scrollbar { display: none; }
+      .radar-grid { stroke: #334155; stroke-dasharray: 4 4; fill: none; }
+      [v-cloak] { display: none; }
     </style>
+    
+    <!-- Libraries -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/astronomy-engine@2.1.19/astronomy.browser.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body class="min-h-screen flex items-center justify-center p-4">
-    <div class="glass p-8 rounded-2xl shadow-2xl w-full max-w-lg">
-        <h1 class="text-3xl font-bold text-center mb-2 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">AstroImage Well</h1>
-        <p class="text-center text-slate-400 mb-6">Plan your astrophotography session</p>
+<body>
+    <div id="app" v-cloak class="min-h-screen flex flex-col">
         
-        <form action="/results" method="POST" class="space-y-4">
-            <div>
-                <label class="block text-sm font-medium mb-1">Your Coordinates</label>
-                <div class="flex gap-2">
-                    <input type="number" step="any" name="latitude" placeholder="Lat (e.g. 42.69)" required class="w-1/2 p-2 rounded bg-slate-800 border border-slate-700 focus:border-blue-500 outline-none">
-                    <input type="number" step="any" name="longitude" placeholder="Lon (e.g. 23.32)" required class="w-1/2 p-2 rounded bg-slate-800 border border-slate-700 focus:border-blue-500 outline-none">
+        <!-- Navbar -->
+        <nav class="border-b border-white/10 bg-space-900/80 backdrop-blur sticky top-0 z-50">
+            <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <span class="text-2xl">🔭</span>
+                    <h1 class="font-bold text-xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400">AstroImage Well <span class="text-xs uppercase px-2 py-0.5 rounded bg-accent-500/20 text-accent-400 border border-accent-500/30">Pro</span></h1>
+                </div>
+                <div class="flex items-center gap-4">
+                     <button @click="toggleNightMode" :class="nightMode ? 'text-red-500' : 'text-slate-400 hover:text-white'">
+                        Use Night Mode <span class="ml-1">👁️</span>
+                     </button>
                 </div>
             </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="flex-1 max-w-7xl mx-auto w-full p-4 grid grid-cols-1 lg:grid-cols-12 gap-6">
             
-            <div>
-                <label class="block text-sm font-medium mb-1">Time</label>
-                <input type="datetime-local" name="datetime" class="w-full p-2 rounded bg-slate-800 border border-slate-700 text-white scheme-dark">
-            </div>
+            <!-- Left Sidebar: Controls (Col 1-3) -->
+            <aside class="lg:col-span-3 space-y-6">
+                <!-- Location & Time -->
+                <div class="glass-panel p-5 rounded-xl space-y-4">
+                    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">My Observatory</h2>
+                    
+                    <div class="space-y-2">
+                        <label class="text-sm text-slate-300">Coordinates</label>
+                        <div class="flex gap-2">
+                            <input v-model.number="lat" type="number" step="0.01" class="w-full bg-space-900 border border-white/10 rounded px-3 py-2 text-sm focus:border-accent-500 outline-none" placeholder="Lat">
+                            <input v-model.number="lon" type="number" step="0.01" class="w-full bg-space-900 border border-white/10 rounded px-3 py-2 text-sm focus:border-accent-500 outline-none" placeholder="Lon">
+                        </div>
+                        <button @click="useGPS" class="text-xs text-accent-400 hover:text-accent-500 flex items-center gap-1">
+                            📍 Detect My Location
+                        </button>
+                    </div>
 
-            <div>
-                <label class="block text-sm font-medium mb-1">Bortle Scale (1-9)</label>
-                <input type="number" name="bortle" min="1" max="9" value="4" class="w-full p-2 rounded bg-slate-800 border border-slate-700">
-            </div>
+                    <div class="space-y-2">
+                        <label class="text-sm text-slate-300">Date & Time</label>
+                        <input v-model="dateStr" type="datetime-local" class="w-full bg-space-900 border border-white/10 rounded px-3 py-2 text-sm text-white scheme-dark focus:border-accent-500 outline-none">
+                    </div>
 
-            <div class="pt-2 border-t border-slate-700">
-                <label class="block text-sm font-medium mb-1 text-blue-300">Equipment (Optional)</label>
-                <div class="grid grid-cols-3 gap-2">
-                    <input type="number" name="focal_length" placeholder="FL (mm)" class="p-2 rounded bg-slate-800 border border-slate-700 text-sm">
-                    <input type="number" name="sensor_width" placeholder="W (mm)" step="0.1" class="p-2 rounded bg-slate-800 border border-slate-700 text-sm">
-                    <input type="number" name="sensor_height" placeholder="H (mm)" step="0.1" class="p-2 rounded bg-slate-800 border border-slate-700 text-sm">
+                    <div class="space-y-2">
+                        <label class="text-sm text-slate-300">Bortle (Sky Quality)</label>
+                         <input v-model.number="bortle" type="range" min="1" max="9" class="w-full h-2 bg-space-900 rounded-lg appearance-none cursor-pointer accent-accent-500">
+                         <div class="flex justify-between text-xs text-slate-500">
+                            <span>1 (Exc)</span>
+                            <span class="text-white font-bold">{{ bortle }}</span>
+                            <span>9 (Bad)</span>
+                         </div>
+                    </div>
+                </div>
+
+                <!-- Moon Status -->
+                <div class="glass-panel p-5 rounded-xl text-center relative overflow-hidden group">
+                    <div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent pointer-events-none"></div>
+                    <div class="relative z-10">
+                         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Moon Phase</h3>
+                         <div class="text-4xl mb-1">{{ moonEmoji }}</div>
+                         <div class="text-2xl font-bold text-white">{{ moonIllumination }}%</div>
+                         <div class="text-xs" :class="moonIsUp ? 'text-green-400' : 'text-slate-500'">
+                            {{ moonIsUp ? 'Currently UP' : 'Currently DOWN' }}
+                         </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Center: Dashboard aka Sky Map (Col 4-12) -->
+            <section class="lg:col-span-9 space-y-6">
+                
+                <!-- Targets Table / Dashboard Switcher -->
+                <div class="glass-panel rounded-xl overflow-hidden flex flex-col h-[700px]">
+                    <div class="p-4 border-b border-white/10 flex items-center justify-between bg-space-800/50">
+                        <div class="flex gap-4">
+                             <button @click="viewMode = 'list'" class="px-3 py-1.5 rounded text-sm font-medium transition" :class="viewMode === 'list' ? 'bg-accent-500 text-white' : 'text-slate-400 hover:text-white'">Target List</button>
+                             <button @click="viewMode = 'radar'" class="px-3 py-1.5 rounded text-sm font-medium transition" :class="viewMode === 'radar' ? 'bg-accent-500 text-white' : 'text-slate-400 hover:text-white'">Radar Map</button>
+                        </div>
+                        <input v-model="searchQuery" type="text" placeholder="Search objects..." class="bg-space-900 border border-white/10 rounded px-3 py-1.5 text-sm focus:border-accent-500 outline-none w-64">
+                    </div>
+                    
+                    <!-- View: List -->
+                    <div v-if="viewMode === 'list'" class="flex-1 overflow-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead class="bg-space-900 sticky top-0 z-10 text-xs uppercase text-slate-400 font-semibold tracking-wider">
+                                <tr>
+                                    <th class="p-3">Object</th>
+                                    <th class="p-3">Type</th>
+                                    <th class="p-3">Constellation</th>
+                                    <th class="p-3 text-right">Mag</th>
+                                    <th class="p-3 text-center">Altitude</th>
+                                    <th class="p-3 text-center">Score</th>
+                                    <th class="p-3 text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-white/5">
+                                <tr v-for="obj in sortedObjects" :key="obj.id" class="hover:bg-white/5 transition group">
+                                    <td class="p-3 font-medium text-white">{{ obj.id }} <span class="text-slate-500 ml-1 text-xs group-hover:text-slate-300">{{ obj.name }}</span></td>
+                                    <td class="p-3 text-sm text-slate-400">{{ obj.type }}</td>
+                                    <td class="p-3 text-sm text-slate-400">{{ obj.const }}</td>
+                                    <td class="p-3 text-right text-sm font-mono text-slate-300">{{ obj.mag }}</td>
+                                    <td class="p-3 text-center">
+                                        <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold" 
+                                             :class="obj.altitude > 30 ? 'bg-success/20 text-success' : obj.altitude > 0 ? 'bg-warning/20 text-warning' : 'bg-space-900 text-slate-600'">
+                                            {{ obj.altitude.toFixed(0) }}°
+                                        </div>
+                                    </td>
+                                    <td class="p-3 text-center">
+                                         <div class="w-full bg-space-900 rounded-full h-1.5 mt-1 overflow-hidden">
+                                            <div class="h-full bg-gradient-to-r from-blue-500 to-accent-500" :style="{ width: Math.min(100, obj.score) + '%' }"></div>
+                                         </div>
+                                         <div class="text-[10px] text-slate-500 mt-0.5">{{ obj.score.toFixed(0) }}/100</div>
+                                    </td>
+                                    <td class="p-3 text-center">
+                                        <button @click="openSimulator(obj)" class="text-xs bg-white/5 hover:bg-white/10 border border-white/10 px-2 py-1 rounded text-slate-300">
+                                            🔭 Sim
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- View: Radar -->
+                    <div v-else class="flex-1 flex items-center justify-center relative p-10">
+                        <div class="relative w-[500px] h-[500px]">
+                            <!-- Radar Background -->
+                            <svg viewBox="0 0 100 100" class="w-full h-full absolute inset-0 select-none">
+                                <circle cx="50" cy="50" r="48" class="stroke-slate-700 fill-space-900" stroke-width="0.5"></circle>
+                                <circle cx="50" cy="50" r="32" class="radar-grid" stroke-width="0.2"></circle> <!-- 30 deg -->
+                                <circle cx="50" cy="50" r="16" class="radar-grid" stroke-width="0.2"></circle> <!-- 60 deg -->
+                                <line x1="50" y1="2" x2="50" y2="98" class="radar-grid" stroke-width="0.2"></line>
+                                <line x1="2" y1="50" x2="98" y2="50" class="radar-grid" stroke-width="0.2"></line>
+                                <text x="50" y="5" text-anchor="middle" class="text-[3px] fill-slate-500 font-mono">N</text>
+                                <text x="96" y="51" text-anchor="middle" class="text-[3px] fill-slate-500 font-mono">E</text>
+                                <text x="50" y="99" text-anchor="middle" class="text-[3px] fill-slate-500 font-mono">S</text>
+                                <text x="4" y="51" text-anchor="middle" class="text-[3px] fill-slate-500 font-mono">W</text>
+                            </svg>
+                            
+                            <!-- Objects -->
+                            <div v-for="obj in visibleObjects" :key="obj.id"
+                                 class="absolute w-2 h-2 -ml-1 -mt-1 rounded-full cursor-pointer hover:scale-150 transition z-10"
+                                 :class="obj.altitude > 30 ? 'bg-success shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-warning opacity-70'"
+                                 :style="getRadarStyle(obj)"
+                                 :title="obj.id">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+        
+        <!-- Modal: Simulator -->
+        <div v-if="selectedObject" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" @click.self="selectedObject = null">
+            <div class="glass-panel w-full max-w-4xl rounded-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                <div class="p-4 border-b border-white/10 flex justify-between items-center bg-space-800">
+                    <h3 class="font-bold text-lg text-white">Target Simulator: {{ selectedObject.id }}</h3>
+                     <button @click="selectedObject = null" class="text-slate-400 hover:text-white">✕</button>
+                </div>
+                <div class="flex-1 overflow-auto bg-black relative flex items-center justify-center p-10">
+                    <!-- DSS Image Placeholer Logic -->
+                    <div class="relative border-2 border-dashed border-slate-700 w-[500px] h-[500px] flex items-center justify-center bg-space-900 group">
+                        <img :src="getDSSUrl(selectedObject)" class="absolute inset-0 w-full h-full object-cover opacity-80" alt="DSS Preview" @error="imageError = true">
+                         <div class="absolute inset-0 border border-success/50 border-2 w-1/2 h-1/2 m-auto pointer-events-none" title="Simulated FOV"></div>
+                         <span class="absolute top-2 left-2 text-xs bg-black/50 px-2 py-1 rounded text-success font-mono">Simulated Field</span>
+                    </div>
+                </div>
+                <div class="p-4 bg-space-900 border-t border-white/10 text-sm text-slate-400">
+                    Loading imagery from STScI DSS Service. The green rectangle represents your sensor (approx).
                 </div>
             </div>
-
-            <button type="submit" class="w-full py-3 mt-4 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg font-bold hover:opacity-90 transition transform hover:scale-[1.02]">
-                Find Targets 🚀
-            </button>
-        </form>
-    </div>
-</body>
-</html>
-  `;
-}
-
-function renderResults(objects, moon, loc, equip) {
-    const rows = objects.map(obj => `
-    <tr class="border-b border-slate-700 hover:bg-slate-700/50 transition">
-        <td class="p-3 font-semibold text-blue-300">${obj.id}</td>
-        <td class="p-3">${obj.name}<br><span class="text-xs text-slate-400">${obj.type}</span></td>
-        <td class="p-3 text-center font-mono ${parseFloat(obj.score) > 80 ? 'text-green-400 font-bold' : parseFloat(obj.score) > 50 ? 'text-yellow-400' : 'text-slate-500'}">${obj.score}</td>
-        <td class="p-3 text-center">${obj.altitude}°<br><span class="text-xs text-slate-400">Az: ${obj.azimuth}°</span></td>
-        <td class="p-3 text-center sm:table-cell hidden">${obj.mag}</td>
-        <td class="p-3 text-center sm:table-cell hidden text-xs">${obj.fov_match || '-'}</td>
-    </tr>
-  `).join('');
-
-    return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Results - AstroImage Well</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }</style>
-</head>
-<body class="p-4 md:p-8 max-w-6xl mx-auto">
-    <div class="flex justify-between items-center mb-6">
-        <a href="/" class="text-blue-400 hover:text-blue-300">← Back</a>
-        <h1 class="text-2xl font-bold">Observation Session</h1>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-            <h3 class="text-slate-400 text-sm uppercase">Moon Status</h3>
-            <div class="text-2xl font-bold mt-1 ${moon.illumination > 50 ? 'text-yellow-400' : 'text-slate-200'}">${moon.illumination}%</div>
-            <div class="text-sm text-slate-400">Alt: ${moon.altitude}° / ${moon.is_up ? 'UP' : 'DOWN'}</div>
         </div>
-        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-            <h3 class="text-slate-400 text-sm uppercase">Location</h3>
-            <div class="text-lg mt-1">${loc.lat}, ${loc.lon}</div>
-            <div class="text-sm text-slate-400">${loc.time.split('T')[0]}</div>
-        </div>
+
     </div>
 
-    <div class="overflow-x-auto rounded-xl border border-slate-700">
-        <table class="w-full text-left border-collapse">
-            <thead class="bg-slate-900 text-slate-400 uppercase text-xs">
-                <tr>
-                    <th class="p-3">ID</th>
-                    <th class="p-3">Object</th>
-                    <th class="p-3 text-center">Score</th>
-                    <th class="p-3 text-center">Pos</th>
-                    <th class="p-3 text-center sm:table-cell hidden">Mag</th>
-                    <th class="p-3 text-center sm:table-cell hidden">FOV</th>
-                </tr>
-            </thead>
-            <tbody class="bg-slate-800 divide-y divide-slate-700">
-                ${rows}
-            </tbody>
-        </table>
-    </div>
+    <!-- Client-Side Catalog Data -->
+    <script>
+        window.CATALOG_DATA = ${catalogJSON};
+    </script>
+
+    <!-- Main Vue App Logic -->
+    <script>
+        const { createApp, ref, computed, onMounted, watch } = Vue;
+
+        createApp({
+            setup() {
+                // State
+                const catalog = ref(window.CATALOG_DATA);
+                const lat = ref(42.69);
+                const lon = ref(23.32);
+                const dateStr = ref(new Date().toISOString().slice(0, 16));
+                const bortle = ref(4);
+                const viewMode = ref('list'); // 'list' or 'radar'
+                const searchQuery = ref("");
+                const nightMode = ref(false);
+                const selectedObject = ref(null);
+                
+                // Computed Astronomy
+                const observer = computed(() => new Astronomy.Observer(lat.value, lon.value, 0));
+                const date = computed(() => new Date(dateStr.value));
+                
+                const moonData = computed(() => {
+                    const phase = Astronomy.MoonPhase(date.value);
+                    const pos = Astronomy.MoonPosition(date.value);
+                    const hor = Astronomy.Horizon(date.value, observer.value, pos.ra, pos.dec, 'normal');
+                    return {
+                        phase,
+                        illumination: Math.round(getIllumination(phase) * 100),
+                        altitude: hor.altitude,
+                        isUp: hor.altitude > 0
+                    };
+                });
+                
+                const processedObjects = computed(() => {
+                    return catalog.value.map(obj => {
+                        const hor = Astronomy.Horizon(date.value, observer.value, obj.ra, obj.dec, 'normal');
+                        
+                        // Scoring
+                        let score = 0;
+                        if (hor.altitude > 0) {
+                            let altScore = (hor.altitude > 30) ? 50 : (hor.altitude / 30) * 50;
+                            const moonP = moonData.value.isUp ? 20 * (moonData.value.illumination/100) : 0; 
+                            const magScore = Math.max(0, 50 - (obj.mag * 5));
+                            score = Math.max(0, altScore + magScore - moonP - (bortle.value * 2));
+                        }
+                        
+                        return {
+                            ...obj,
+                            altitude: hor.altitude,
+                            azimuth: hor.azimuth,
+                            score: score
+                        };
+                    });
+                });
+                
+                const sortedObjects = computed(() => {
+                    let items = processedObjects.value.filter(o => 
+                        o.name.toLowerCase().includes(searchQuery.value.toLowerCase()) || 
+                        o.id.toLowerCase().includes(searchQuery.value.toLowerCase())
+                    );
+                    return items.sort((a, b) => b.score - a.score);
+                });
+                
+                const visibleObjects = computed(() => processedObjects.value.filter(o => o.altitude > 0));
+
+                const moonIsUp = computed(() => moonData.value.isUp);
+                const moonIllumination = computed(() => moonData.value.illumination);
+                const moonEmoji = computed(() => {
+                    const p = moonData.value.phase; // 0..360
+                    if (p < 45) return '🌑';
+                    if (p < 90) return '🌒';
+                    if (p < 135) return '🌓';
+                    if (p < 180) return '🌔';
+                    if (p < 225) return '🌕';
+                    if (p < 270) return '🌖';
+                    if (p < 315) return '🌗';
+                    return '🌘';
+                });
+
+                // Methods
+                function getIllumination(phase) {
+                    const rad = phase * (Math.PI / 180);
+                    return 0.5 * (1 - Math.cos(rad));
+                }
+                
+                function useGPS() {
+                    if (navigator.geolocation) {
+                        navigator.geolocation.getCurrentPosition(pos => {
+                            lat.value = parseFloat(pos.coords.latitude.toFixed(4));
+                            lon.value = parseFloat(pos.coords.longitude.toFixed(4));
+                        });
+                    }
+                }
+                
+                function toggleNightMode() {
+                    nightMode.value = !nightMode.value;
+                    if(nightMode.value) document.documentElement.style.filter = "sepia(1) hue-rotate(-50deg) contrast(1.2) brightness(0.8)";
+                    else document.documentElement.style.filter = "";
+                }
+                
+                function getRadarStyle(obj) {
+                    // Polar to Cartesian for radar
+                    // Radius = 90 - altitude (Zenith is 0 distance)
+                    // Angle = azimuth (North is up, but standard math is East=0)
+                    // Azimuth 0 (North) -> should be -90 deg logic or similar
+                    // Let's stick to standard SVG coordinate:
+                    // cx=50, cy=50. r=50.
+                    // r_norm = (90 - alt) / 90
+                    // angle_rad = (az - 90) * PI / 180  (Subtract 90 to rotate 0 to Top)
+                    
+                    const r_norm = (90 - obj.altitude) / 90 * 48; // 48 is max radius
+                    const angle_rad = (obj.azimuth - 90) * (Math.PI / 180);
+                    
+                    const x = 50 + r_norm * Math.cos(angle_rad);
+                    const y = 50 + r_norm * Math.sin(angle_rad);
+                    
+                    return { left: x + '%', top: y + '%' };
+                }
+                
+                function openSimulator(obj) {
+                    selectedObject.value = obj;
+                }
+                
+                function getDSSUrl(obj) {
+                    // DSS Image Service
+                    // size usually in arcmin. 
+                    const h = obj.size || 15;
+                    const w = obj.size || 15;
+                    return \`https://server.dss.stsci.edu/product?task=thumb&r=\${obj.ra}&d=\${obj.dec}&w=\${w}&h=\${h}&f=gif\`;
+                }
+
+                // Initial Timer
+                onMounted(() => {
+                    setInterval(() => {
+                         // Update every minute (reactive date)
+                         // For now manual is fine.
+                    }, 60000);
+                });
+
+                return {
+                    lat, lon, dateStr, bortle,
+                    sortedObjects, visibleObjects,
+                    moonIllumination, moonIsUp, moonEmoji,
+                    viewMode, searchQuery,
+                    toggleNightMode, nightMode,
+                    useGPS, getRadarStyle,
+                    openSimulator, selectedObject, getDSSUrl
+                };
+            }
+        }).mount('#app');
+    </script>
 </body>
-</html>
-  `;
+</html>`;
 }
