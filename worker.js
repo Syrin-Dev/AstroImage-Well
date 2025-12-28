@@ -88,15 +88,24 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
         const tooltip = `${obj.id} (${obj.name}) | Alt: ${obj.altitude.toFixed(0)}°`;
 
         return `
-        <g class="cursor-pointer" 
-           onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')"
-           onmouseenter="showTooltip(evt, '${obj.id}', '${obj.name}', '${obj.altitude.toFixed(0)}')"
-           onmouseleave="hideTooltip()"
-        >
-            <!-- Hit Area -->
-            <circle cx="${x}" cy="${y}" r="6" fill="transparent" class="hover:fill-white/10"></circle>
-            <!-- Dot -->
-            <circle cx="${x}" cy="${y}" r="2" fill="${color}" class="drop-shadow-[0_0_5px_${color}] ${pulseClass} hover:scale-150 transition-transform"></circle>
+        <!-- Item Group -->
+        <g class="group cursor-pointer hover:z-[100]" onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')">
+            
+            <!-- Large Hit Area (Invisible but clickable) -->
+            <circle cx="${x}" cy="${y}" r="8" fill="transparent" class="group-hover:fill-white/10"></circle>
+            
+            <!-- Visual Dot -->
+            <circle cx="${x}" cy="${y}" r="2" fill="${color}" class="drop-shadow-[0_0_5px_${color}] ${pulseClass} transition-transform group-hover:scale-150"></circle>
+            
+            <!-- CSS Tooltip (Inside ForeignObject) -->
+            <foreignObject x="${x - 30}" y="${y - 45}" width="60" height="40" class="pointer-events-none overflow-visible">
+                <div xmlns="http://www.w3.org/1999/xhtml" class="w-full h-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150 transform translate-y-2 group-hover:translate-y-0">
+                    <div class="bg-black/90 border border-slate-700/50 rounded px-2 py-1 shadow-xl flex flex-col items-center text-center">
+                        <span class="text-[6px] font-bold text-white whitespace-nowrap leading-none mb-0.5">${obj.id}</span>
+                        <span class="text-[4px] text-accent-400 whitespace-nowrap leading-none">Alt: ${obj.altitude.toFixed(0)}°</span>
+                    </div>
+                </div>
+            </foreignObject>
         </g>`;
     }).join('');
 
@@ -348,39 +357,7 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
             setTimeout(() => {
                 modal.classList.add('hidden');
                 document.getElementById('simImage').src = ''; 
-            }, 300);
-        }
-
-        // --- Singleton Tooltip Logic ---
-        const tooltipEl = document.getElementById('globalTooltip');
-        
-        function showTooltip(evt, id, name, alt) {
-            // Content
-            document.getElementById('tt-id').innerText = id;
-            document.getElementById('tt-name').innerText = name;
-            document.getElementById('tt-alt').innerText = 'ALT: ' + alt + '°';
-            
-            // Position
-            const rect = evt.target.getBoundingClientRect();
-            // Or use mouse? let's use element center for stability
-            // Actually rect of <g> might be large. Let's use mouse evt target (circle)
-            // But evt.target is the circle inside G.
-            
-            // Let's just place it near the mouse
-            // But better: place it exactly above the dot.
-            // SVG coordinates are tricky. Let's use Client Rects.
-            const dotRect = evt.target.getBoundingClientRect();
-            const top = dotRect.top - 60 + window.scrollY; // 60px above
-            const left = dotRect.left + (dotRect.width/2) - (150/2) + window.scrollX; // Center 150px tooltip
-            
-            tooltipEl.style.top = top + 'px';
-            tooltipEl.style.left = left + 'px';
-            tooltipEl.style.opacity = '1';
-        }
-        
-        function hideTooltip() {
-            tooltipEl.style.opacity = '0';
-        }
+        // ... closeSim ...
 
         function imageLoaded() {
             const loader = document.getElementById('simLoading');
@@ -410,16 +387,6 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
             if (e.key === 'Escape') closeSim();
         });
     </script>
-    
-    <!-- External Singleton Tooltip -->
-    <div id="globalTooltip" class="fixed top-0 left-0 w-[150px] pointer-events-none opacity-0 transition-opacity duration-200 z-[100] flex flex-col items-center">
-        <div class="bg-slate-900/95 border border-slate-600 rounded-md px-3 py-2 shadow-2xl flex flex-col items-center text-center backdrop-blur-sm">
-            <span id="tt-id" class="text-xs font-bold text-white whitespace-nowrap uppercase tracking-wider"></span>
-            <span id="tt-name" class="text-[10px] text-slate-400 whitespace-nowrap w-full truncate mb-1"></span>
-            <span id="tt-alt" class="text-[9px] font-mono text-accent-400 bg-accent-400/10 px-1.5 rounded-full"></span>
-        </div>
-        <div class="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-600 -mt-[1px]"></div>
-    </div>
 </body>
 </html>
     `;
