@@ -1,6 +1,8 @@
 name = "astroimage-well"
 main = "worker.js"
 compatibility_date = "2024-09-23"
+# No compatibility_flags for python!
+# No python_requirements!
 
 [vars]
 # Add any environment variables here

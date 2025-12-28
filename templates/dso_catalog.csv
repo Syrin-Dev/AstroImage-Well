@@ -1,7 +1,0 @@
-id,name,type,mag,ra,dec,size,constellation,ra_deg,dec_deg
-M1,Crab Nebula,Supernova Remnant,8.4,05h 34m 31.94s,+22d 00m 52.2s,6.0,Unknown,83.63308333333332,22.0145
-M8,Lagoon Nebula,Nebula,6.0,18h 03m 37s,-24d 23m 12s,90.0,Unknown,270.90416666666664,-24.386666666666667
-M13,Hercules Cluster,Globular Cluster,5.8,16h 41m 41.24s,+36d 27m 35.5s,20.0,Unknown,250.42183333333332,36.45986111111112
-M31,Andromeda Galaxy,Galaxy,3.44,00h 42m 44.3s,+41d 16m 09s,190.0,Unknown,10.684583333333332,41.26916666666666
-M42,Orion Nebula,Nebula,4.0,05h 35m 17.3s,-05d 23m 28s,85.0,Unknown,83.82208333333332,-5.391111111111112
-M45,Pleiades,Open Cluster,1.6,03h 47m 24s,+24d 07m 00s,110.0,Unknown,56.849999999999994,24.116666666666667
