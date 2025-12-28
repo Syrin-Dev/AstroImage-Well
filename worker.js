@@ -89,13 +89,13 @@ function renderPage(objects, moon, lat, lon, date, bortle) {
 
         return `
         <g class="group cursor-pointer hover:z-50" onclick="openSim('${obj.id}', '${obj.ra}', '${obj.dec}', '${obj.size || 15}')">
-            <title>${obj.id} - ${obj.name} (Alt: ${obj.altitude.toFixed(0)}°)</title>
+            <title>${obj.id} - ${obj.name}</title>
             
-            <!-- Hit Area -->
-            <circle cx="${x}" cy="${y}" r="6" fill="transparent" class="group-hover:fill-white/10"></circle>
+            <!-- Hit Area (Invisible) -->
+            <circle cx="${x}" cy="${y}" r="6" fill="white" opacity="0"></circle>
             
-            <!-- Dot -->
-            <circle cx="${x}" cy="${y}" r="2" fill="${color}" class="drop-shadow-[0_0_5px_${color}] ${pulseClass} transition-transform group-hover:scale-150"></circle>
+            <!-- Visible Dot -->
+            <circle cx="${x}" cy="${y}" r="2.5" fill="${color}" class="drop-shadow-[0_0_3px_${color}] transition-all duration-200 group-hover:r-[4] group-hover:fill-white"></circle>
         </g>`;
     }).join('');
 
